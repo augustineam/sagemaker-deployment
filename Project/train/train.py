@@ -46,47 +46,96 @@ def _get_train_data_loader(batch_size, training_dir):
     print("Get train data loader.")
 
     train_data = pd.read_csv(os.path.join(training_dir, "train.csv"), header=None, names=None)
+    val_data = pd.read_csv(os.path.join(training_dir, "validation.csv"), header=None, names=None)
 
     train_y = torch.from_numpy(train_data[[0]].values).float().squeeze()
     train_X = torch.from_numpy(train_data.drop([0], axis=1).values).long()
+    val_y = torch.from_numpy(val_data[[0]].values).float().squeeze()
+    val_X = torch.from_numpy(val_data.drop([0], axis=1).values).long()
 
     train_ds = torch.utils.data.TensorDataset(train_X, train_y)
+    val_ds = torch.utils.data.TensorDataset(val_X, val_y)
 
-    return torch.utils.data.DataLoader(train_ds, batch_size=batch_size)
+    return torch.utils.data.DataLoader(train_ds, batch_size=batch_size), \
+           torch.utils.data.DataLoader(val_ds, batch_size=batch_size)
 
 
-def train(model, train_loader, epochs, optimizer, loss_fn, device):
+def train(model, train_loader, val_loader, epochs, optimizer, loss_fn, device):
     """
     This is the training method that is called by the PyTorch training script. The parameters
     passed are as follows:
     model        - The PyTorch model that we wish to train.
     train_loader - The PyTorch DataLoader that should be used during training.
+    val_loader   - The PyTorch DataLoader that should be used during validation.
     epochs       - The total number of epochs to train for.
     optimizer    - The optimizer to use during training.
     loss_fn      - The loss function used for training.
     device       - Where the model and data should be loaded (gpu or cpu).
     """
     
-    # TODO: Paste the train() method developed in the notebook here.
-
+    min_val_loss = 1000
+    best_path = ''
+    
     for epoch in range(1, epochs + 1):
-        model.train()
+        
         total_loss = 0
+        val_loss = 0
+        
+        # Train the model
+        model.train()
         for batch in train_loader:         
             batch_X, batch_y = batch
             
             batch_X = batch_X.to(device)
             batch_y = batch_y.to(device)
             
-            # TODO: Complete this train method to train the model provided.
             optimizer.zero_grad()
+            
             _y = model(batch_X)
+            
             loss = loss_fn(_y, batch_y)
             loss.backward()
+            
             optimizer.step()
                         
             total_loss += loss.data.item()
-        print("Epoch: {}, BCELoss: {}".format(epoch, total_loss / len(train_loader)))
+            
+        # Evaluate the model
+        model.eval()
+        for batch in val_loader:
+            batch_X, batch_y = batch
+            
+            batch_X = batch_X.to(device)
+            batch_y = batch_y.to(device)
+            
+            _y = model(batch_X)
+            
+            loss = loss_fn(_y, batch_y)
+            
+            val_loss += loss.data.item()
+        
+        # Compute train and validation losses
+        val_loss = val_loss / len(val_loader)
+        total_loss = total_loss / len(train_loader)
+        print("#{:05d}; train-loss={:.4f}; validation-loss={:.4f};".format(epoch, total_loss, val_loss))
+        
+        # Save best epoch data
+        if val_loss < min_val_loss:
+            min_val_loss = val_loss
+            best_path = "./checkpoints/lstm-epoch-{:05d}-val_loss-{:.4f}.pt".format(epoch, val_loss)
+            torch.save({
+                'epoch': epoch,
+                'min_val_loss': min_val_loss,
+                'state_dict': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+            }, best_path)
+    
+    # Load best epoch data
+    checkpoint = torch.load(best_path)
+    # initialize state_dict from checkpoint to model
+    model.load_state_dict(checkpoint['state_dict'])
+    # initialize optimizer from checkpoint to optimizer
+    optimizer.load_state_dict(checkpoint['optimizer'])
 
 
 if __name__ == '__main__':
@@ -126,7 +175,7 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
 
     # Load the training data.
-    train_loader = _get_train_data_loader(args.batch_size, args.data_dir)
+    train_loader, val_loader = _get_train_data_loader(args.batch_size, args.data_dir)
 
     # Build the model.
     model = LSTMClassifier(args.embedding_dim, args.hidden_dim, args.vocab_size).to(device)
@@ -142,7 +191,8 @@ if __name__ == '__main__':
     optimizer = optim.Adam(model.parameters())
     loss_fn = torch.nn.BCELoss()
 
-    train(model, train_loader, args.epochs, optimizer, loss_fn, device)
+    os.mkdir('./checkpoints')
+    train(model, train_loader, val_loader, args.epochs, optimizer, loss_fn, device)
 
     # Save the parameters used to construct the model
     model_info_path = os.path.join(args.model_dir, 'model_info.pth')
