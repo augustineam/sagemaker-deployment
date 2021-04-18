@@ -75,6 +75,7 @@ def train(model, train_loader, val_loader, epochs, optimizer, loss_fn, device):
     
     min_val_loss = 1000
     best_path = ''
+    no_improvement = 0
     
     for epoch in range(1, epochs + 1):
         
@@ -121,6 +122,7 @@ def train(model, train_loader, val_loader, epochs, optimizer, loss_fn, device):
         
         # Save best epoch data
         if val_loss < min_val_loss:
+            no_improvement = 0
             min_val_loss = val_loss
             best_path = "./checkpoints/lstm-epoch-{:05d}-val_loss-{:.4f}.pt".format(epoch, val_loss)
             torch.save({
@@ -129,7 +131,13 @@ def train(model, train_loader, val_loader, epochs, optimizer, loss_fn, device):
                 'state_dict': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
             }, best_path)
+        else:
+            no_improvement += 1
+        
+        if no_improvement == 10:
+            break
     
+    print("Load best path with validation-loss={:.4f};".format(min_val_loss))
     # Load best epoch data
     checkpoint = torch.load(best_path)
     # initialize state_dict from checkpoint to model
@@ -151,6 +159,8 @@ if __name__ == '__main__':
                         help='number of epochs to train (default: 10)')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
+    parser.add_argument('--lr', type=float, default=0.001, metavar='N',
+                        help='leraning rate (default: 1e-3)')
 
     # Model Parameters
     parser.add_argument('--embedding_dim', type=int, default=32, metavar='N',
@@ -188,7 +198,7 @@ if __name__ == '__main__':
     ))
 
     # Train the model.
-    optimizer = optim.Adam(model.parameters())
+    optimizer = optim.Adam(model.parameters(), args.lr)
     loss_fn = torch.nn.BCELoss()
 
     os.mkdir('./checkpoints')
